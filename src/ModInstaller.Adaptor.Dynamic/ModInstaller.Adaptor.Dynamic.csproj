@@ -14,13 +14,17 @@
         <ProjectReference Include="..\Utils\Utils.csproj" />
     </ItemGroup>
 
-    <ItemGroup Condition=" '$(OS)' == 'Windows_NT' ">
+    <ItemGroup Condition=" '$(OS)' == 'Windows_NT' Or '$(FomodMono)' == 'true' ">
         <ProjectReference Include="..\InstallScripting\CSharpScript\CSharpScript.csproj" />
     </ItemGroup>
 
     <PropertyGroup Condition=" '$(OS)' == 'Windows_NT' ">
         <!-- NOTE(erri120): Required by CSharpScript project -->
         <TargetFramework Condition="'$(FomodMono)' != 'true'">net9.0-windows</TargetFramework>
+        <DefineConstants>$(DefineConstants);USE_CSHARP_SCRIPT</DefineConstants>
+    </PropertyGroup>
+
+    <PropertyGroup Condition=" '$(FomodMono)' == 'true' ">
         <DefineConstants>$(DefineConstants);USE_CSHARP_SCRIPT</DefineConstants>
     </PropertyGroup>
 

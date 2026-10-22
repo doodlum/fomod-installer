@@ -2,5 +2,6 @@
   <!-- dotnet build -p:FomodMono=true builds the IPC helper for .NET Framework 4.8, which Mono runs on Linux -->
   <PropertyGroup Condition="'$(FomodMono)' == 'true' And '$(MSBuildProjectName)' != 'ModInstaller.Native'">
     <TargetFramework>net48</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 </Project>

@@ -302,6 +302,18 @@ async function main() {
         await sign(exePath);
       }
 
+      // The .NET Framework 4.8 helper that Mono runs on Linux (see Directory.Build.props)
+      console.log(`Building ModInstaller.IPC for Mono (${configuration})`);
+      await spawnAsync("dotnet", [
+        "publish",
+        ipcDir,
+        "-c",
+        configuration,
+        "-p:FomodMono=true",
+        "-o",
+        path.join(outputDir, "mono"),
+      ]);
+
       console.log("");
     }
 
