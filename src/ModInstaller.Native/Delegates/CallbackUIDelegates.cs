@@ -1,235 +1,145 @@
-﻿using BUTR.NativeAOT.Shared;
-
+using BUTR.NativeAOT.Shared;
 using FomodInstaller.Interface;
 using FomodInstaller.Interface.ui;
-
 using System;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace ModInstaller.Native.Adapters;
 
 internal class CallbackUIDelegates : UIDelegates
 {
-    private record StartDialogCallbacksData
+    private sealed class Dialog
     {
-        public Action<int, int, int[]> Select { get; init; }
-        public Action<bool, int> Continue { get; init; }
-        public Action Cancel { get; init; }
+        public readonly object Gate = new();
+        public required nint Id { get; init; }
+        public required Action<int, int, int[]> Select { get; init; }
+        public required Action<bool, int> Continue { get; init; }
+        public required Action Cancel { get; init; }
+        public bool Active = true;
     }
-
+    private static long _nextId;
+    private static readonly ConcurrentDictionary<nint, Dialog> Dialogs = new();
+    private readonly object _gate = new();
+    private bool _closing;
+    private Dialog? _dialog;
     private readonly unsafe param_ptr* _pOwner;
     private readonly N_UI_StartDialog _startDialog;
     private readonly N_UI_EndDialog _endDialog;
     private readonly N_UI_UpdateState _updateState;
     private readonly N_UI_ReportError _reportError;
-
-    public unsafe CallbackUIDelegates(param_ptr* pOwner,
-        N_UI_StartDialog startDialog,
-        N_UI_EndDialog endDialog,
-        N_UI_UpdateState updateState,
-        N_UI_ReportError reportError)
+    public unsafe CallbackUIDelegates(param_ptr* owner, N_UI_StartDialog start,
+        N_UI_EndDialog end, N_UI_UpdateState update, N_UI_ReportError report)
     {
-        _pOwner = pOwner;
-        _startDialog = startDialog;
-        _endDialog = endDialog;
-        _updateState = updateState;
-        _reportError = reportError;
+        _pOwner = owner; _startDialog = start; _endDialog = end;
+        _updateState = update; _reportError = report;
     }
-
-    public override unsafe void StartDialog(string moduleName, HeaderImage image, Action<int, int, int[]> select, Action<bool, int> cont, Action cancel)
+    private Dialog? TakeDialog(bool close)
     {
-#if DEBUG
-        using var logger = LogMethod(moduleName.ToFormattable());
-#else
-        using var logger = LogMethod();
-#endif
-
-        if (_currentDialogHandle is not null)
-            throw new Exception("Should be null");
-
-        _currentDialogHandle = GCHandle.Alloc(new StartDialogCallbacksData
+        Dialog? dialog;
+        lock (_gate)
         {
-            Select = select,
-            Continue = cont,
-            Cancel = cancel,
-        }, GCHandleType.Normal);
-
-        fixed (char* pModuleName = moduleName)
-        fixed (char* pImage = BUTR.NativeAOT.Shared.Utils.SerializeJson(image, Bindings.CustomSourceGenerationContext.HeaderImage))
+            if (close) _closing = true;
+            dialog = _dialog;
+            _dialog = null;
+        }
+        if (dialog is not null)
+        {
+            Dialogs.TryRemove(dialog.Id, out _);
+            // Never nest _gate and the reply gate: an active reply can EndDialog.
+            lock (dialog.Gate) dialog.Active = false;
+        }
+        return dialog;
+    }
+    public void RevokeDialog() => TakeDialog(false);
+    public void RequestClose()
+    {
+        var dialog = TakeDialog(true);
+        dialog?.Cancel();
+    }
+    public override unsafe void StartDialog(string moduleName, HeaderImage image,
+        Action<int, int, int[]> select, Action<bool, int> cont, Action cancel)
+    {
+        var dialog = new Dialog { Id = checked((nint) Interlocked.Increment(ref _nextId)),
+            Select = select, Continue = cont, Cancel = cancel };
+        lock (_gate)
+        {
+            // Outside the native-call catch: a late dialog must never wait for JS.
+            if (_closing) throw new OperationCanceledException("Installer is closing");
+            if (_dialog is not null) throw new InvalidOperationException("Dialog is already active");
+            Dialogs[dialog.Id] = dialog;
+            _dialog = dialog;
+        }
+        fixed (char* name = moduleName)
+        fixed (char* header = BUTR.NativeAOT.Shared.Utils.SerializeJson(image, Bindings.CustomSourceGenerationContext.HeaderImage))
         {
             try
             {
-                using var result = SafeStructMallocHandle.Create(_startDialog(_pOwner, (param_string*) pModuleName, (param_json*) pImage, (param_ptr*) GCHandle.ToIntPtr(_currentDialogHandle.Value), &StartDialogSelectCallback, &StartDialogContinueCallback, &StartDialogCancelCallback), true);
-                logger.LogResult(result);
+                using var result = SafeStructMallocHandle.Create(_startDialog(_pOwner,
+                    (param_string*) name, (param_json*) header, (param_ptr*) dialog.Id,
+                    &StartDialogSelectCallback, &StartDialogContinueCallback, &StartDialogCancelCallback), true);
                 result.ValueAsVoid();
             }
-            catch (Exception e)
+            catch
             {
-                logger.LogException(e);
-                _currentDialogHandle?.Free();
-                _currentDialogHandle = null;
+                RevokeDialog();
+                cancel();
+                throw;
             }
         }
     }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe void StartDialogSelectCallback(param_ptr* pOwner, param_int stepId, param_int groupId, param_json* optionIdsJson, return_value_void* pResult)
+    private static unsafe void Reply(param_ptr* owner, return_value_void* pResult, Action<Dialog> action)
     {
-#if DEBUG
-        using var logger = LogCallbackMethod(&stepId, &groupId, optionIdsJson, pResult);
-#else
         using var logger = LogCallbackMethod(pResult);
-#endif
-
+        // Own the reply allocation even when its ID was already revoked.
+        using var result = SafeStructMallocHandle.Create(pResult, true);
+        Dialog? dialog = null;
         try
         {
-
-            if (pOwner == null)
-            {
-                logger.LogException(new ArgumentNullException(nameof(pOwner)));
-                return;
-            }
-
-            if (GCHandle.FromIntPtr((IntPtr) pOwner) is not {Target: StartDialogCallbacksData callbacksData})
-            {
-                logger.LogException(new InvalidOperationException("Invalid GCHandle."));
-                return;
-            }
-
-            using var result = SafeStructMallocHandle.Create(pResult, true);
-            logger.LogResult(result);
             result.ValueAsVoid();
-
-            var optionIds = BUTR.NativeAOT.Shared.Utils.DeserializeJson<int[]>(optionIdsJson, Bindings.CustomSourceGenerationContext.Int32Array);
-            callbacksData.Select(stepId, groupId, optionIds);
+            if (!Dialogs.TryGetValue((nint) owner, out dialog)) return;
+            lock (dialog.Gate) { if (dialog.Active) action(dialog); }
         }
         catch (Exception e)
         {
             logger.LogException(e);
-            throw;
+            // The action remains available even if EndDialog revoked its ID.
+            try { dialog?.Cancel(); } catch (Exception cancelError) { logger.LogException(cancelError); }
         }
     }
-
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe void StartDialogContinueCallback(param_ptr* pOwner, param_bool forward, param_int currentStepId, return_value_void* pResult)
-    {
-#if DEBUG
-        using var logger = LogCallbackMethod(&forward, &currentStepId, pResult);
-#else
-        using var logger = LogCallbackMethod(pResult);
-#endif
-
-        try
-        {
-
-            if (pOwner == null)
-            {
-                logger.LogException(new ArgumentNullException(nameof(pOwner)));
-                return;
-            }
-
-            if (GCHandle.FromIntPtr((IntPtr) pOwner) is not {Target: StartDialogCallbacksData callbacksData})
-            {
-                logger.LogException(new InvalidOperationException("Invalid GCHandle."));
-                return;
-            }
-
-            using var result = SafeStructMallocHandle.Create(pResult, true);
-            logger.LogResult(result);
-            result.ValueAsVoid();
-
-            callbacksData.Continue(forward, currentStepId);
-        }
-        catch (Exception e)
-        {
-            logger.LogException(e);
-            throw;
-        }
-    }
-
+    public static unsafe void StartDialogSelectCallback(param_ptr* owner, param_int step, param_int group, param_json* options, return_value_void* result)
+        => Reply(owner, result, dialog => dialog.Select(step, group,
+            BUTR.NativeAOT.Shared.Utils.DeserializeJson(options, Bindings.CustomSourceGenerationContext.Int32Array)));
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    public static unsafe void StartDialogCancelCallback(param_ptr* pOwner, return_value_void* pResult)
-    {
-#if DEBUG
-        using var logger = LogCallbackMethod(pResult);
-#else
-        using var logger = LogCallbackMethod(pResult);
-#endif
-
-        try
-        {
-            if (pOwner == null)
-            {
-                logger.LogException(new ArgumentNullException(nameof(pOwner)));
-                return;
-            }
-
-            if (GCHandle.FromIntPtr((IntPtr) pOwner) is not {Target: StartDialogCallbacksData callbacksData})
-            {
-                logger.LogException(new InvalidOperationException("Invalid GCHandle."));
-                return;
-            }
-
-            using var result = SafeStructMallocHandle.Create(pResult, true);
-            logger.LogResult(result);
-            result.ValueAsVoid();
-
-            callbacksData.Cancel();
-        }
-        catch (Exception e)
-        {
-            logger.LogException(e);
-            throw;
-        }
-    }
-
-    private GCHandle? _currentDialogHandle;
-
+    public static unsafe void StartDialogContinueCallback(param_ptr* owner, param_bool forward, param_int step, return_value_void* result)
+        => Reply(owner, result, dialog => dialog.Continue(forward, step));
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    public static unsafe void StartDialogCancelCallback(param_ptr* owner, return_value_void* result)
+        => Reply(owner, result, dialog => dialog.Cancel());
     public override unsafe void EndDialog()
     {
-#if DEBUG
+        RevokeDialog();
         using var logger = LogMethod();
-#else
-        using var logger = LogMethod();
-#endif
-
         try
         {
             using var result = SafeStructMallocHandle.Create(_endDialog(_pOwner), true);
-            logger.LogResult(result);
             result.ValueAsVoid();
         }
-        catch (Exception e)
-        {
-            logger.LogException(e);
-        }
+        catch (Exception e) { logger.LogException(e); }
     }
-
-    public override unsafe void UpdateState(InstallerStep[] installSteps, int currentStepId)
+    public override unsafe void UpdateState(InstallerStep[] steps, int current)
     {
-#if DEBUG
-        using var logger = LogMethod(currentStepId);
-#else
-        using var logger = LogMethod();
-#endif
-
-        fixed (char* pInstallSteps = BUTR.NativeAOT.Shared.Utils.SerializeJson(installSteps, Bindings.CustomSourceGenerationContext.InstallerStepArray))
+        lock (_gate) { if (_closing) throw new OperationCanceledException("Installer is closing"); }
+        fixed (char* json = BUTR.NativeAOT.Shared.Utils.SerializeJson(steps, Bindings.CustomSourceGenerationContext.InstallerStepArray))
         {
-            try
-            {
-                using var result = SafeStructMallocHandle.Create(_updateState(_pOwner, (param_json*) pInstallSteps, (param_int) currentStepId), true);
-                logger.LogResult(result);
-                result.ValueAsVoid();
-            }
-            catch (Exception e)
-            {
-                logger.LogException(e);
-            }
+            using var result = SafeStructMallocHandle.Create(_updateState(_pOwner, (param_json*) json, current), true);
+            result.ValueAsVoid();
         }
     }
-
     public override void ReportError(string title, string message, string details)
     {
 #if DEBUG
@@ -282,7 +192,7 @@ internal class CallbackUIDelegates : UIDelegates
         catch (Exception e)
         {
             logger.LogException(e);
-            throw;
+            // Never unwind a managed exception through an unmanaged callback.
         }
     }
 

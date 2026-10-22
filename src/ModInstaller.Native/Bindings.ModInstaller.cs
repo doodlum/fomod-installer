@@ -129,75 +129,58 @@ public static unsafe partial class Bindings
         }
     }
 
-    [UnmanagedCallersOnly(EntryPoint = "install", CallConvs = [typeof(CallConvCdecl)]), IsNotConst<IsPtrConst>]
-    public static return_value_async* Install(
-        param_ptr* p_handle,
-        [IsConst<IsPtrConst>] param_json* p_mod_archive_file_list,
-        [IsConst<IsPtrConst>] param_json* p_stop_patterns,
-        [IsConst<IsPtrConst>] param_string* p_plugin_path,
-        [IsConst<IsPtrConst>] param_string* p_script_path,
-        [IsConst<IsPtrConst>] param_json* p_preset,
-        [IsConst<IsPtrConst>] param_bool preselect,
-        [IsConst<IsPtrConst>] param_bool validate,
-        param_ptr* p_callback_handler,
-        delegate* unmanaged[Cdecl]<param_ptr*, return_value_json*, void> p_callback)
+    [UnmanagedCallersOnly(EntryPoint = "cancel_handler", CallConvs = [typeof(CallConvCdecl)])]
+    public static return_value_void* CancelHandler(param_ptr* handle)
     {
-#if DEBUG
-        using var logger = LogMethod(p_mod_archive_file_list, p_stop_patterns, p_plugin_path, p_script_path, p_preset, &validate);
-#else
-        using var logger = LogMethod();
-#endif
-        
+        try { NativeCoreDelegatesHandler.FromPointer(handle)!.RequestClose(); return return_value_void.AsValue(false); }
+        catch (Exception e) { return return_value_void.AsException(e, false); }
+    }
+    [UnmanagedCallersOnly(EntryPoint = "handler_is_idle", CallConvs = [typeof(CallConvCdecl)])]
+    public static return_value_bool* HandlerIsIdle(param_ptr* handle)
+    {
+        try { return return_value_bool.AsValue(NativeCoreDelegatesHandler.FromPointer(handle)!.IsIdle, false); }
+        catch (Exception e) { return return_value_bool.AsException(e, false); }
+    }
+    [UnmanagedCallersOnly(EntryPoint = "install", CallConvs = [typeof(CallConvCdecl)]), IsNotConst<IsPtrConst>]
+    public static return_value_async* Install(param_ptr* handle,
+        [IsConst<IsPtrConst>] param_json* files, [IsConst<IsPtrConst>] param_json* patterns,
+        [IsConst<IsPtrConst>] param_string* plugin, [IsConst<IsPtrConst>] param_string* script,
+        [IsConst<IsPtrConst>] param_json* p_preset, [IsConst<IsPtrConst>] param_bool preselect,
+        [IsConst<IsPtrConst>] param_bool validate, param_ptr* callbackOwner,
+        delegate* unmanaged[Cdecl]<param_ptr*, return_value_json*, void> callback)
+    {
+        NativeCoreDelegatesHandler? handler = null;
+        bool accepted = false;
         try
         {
-            if (p_handle is null || NativeCoreDelegatesHandler.FromPointer(p_handle) is not { } handler)
-                return return_value_async.AsError(BUTR.NativeAOT.Shared.Utils.Copy("Handler is null or wrong!", false), false);
-
-            var modArchiveFileList = BUTR.NativeAOT.Shared.Utils.DeserializeJson(p_mod_archive_file_list, CustomSourceGenerationContext.StringArray);
-            var stopPatterns = BUTR.NativeAOT.Shared.Utils.DeserializeJson(p_stop_patterns, CustomSourceGenerationContext.StringArray);
-            var pluginPath = p_plugin_path is null ? null : new string(param_string.ToSpan(p_plugin_path));
-            var scriptPath = new string(param_string.ToSpan(p_script_path));
+            handler = NativeCoreDelegatesHandler.FromPointer(handle) ?? throw new ArgumentException("Invalid handler");
+            var list = BUTR.NativeAOT.Shared.Utils.DeserializeJson(files, CustomSourceGenerationContext.StringArray);
+            var stops = BUTR.NativeAOT.Shared.Utils.DeserializeJson(patterns, CustomSourceGenerationContext.StringArray);
+            var pluginPath = plugin is null ? null : new string(param_string.ToSpan(plugin));
+            var scriptPath = new string(param_string.ToSpan(script));
             var preset = BUTR.NativeAOT.Shared.Utils.DeserializeJson(p_preset, CustomSourceGenerationContext.JsonDocument);
-
-            var progressDelegate = new ProgressDelegate((progress) => { });
-
-            Installer.Install(modArchiveFileList.ToList(), stopPatterns.ToList(), pluginPath, scriptPath, preset, preselect, validate, progressDelegate, handler).ContinueWith(result =>
+            if (!handler.TryBeginInstall()) throw new InvalidOperationException("Installer is closing or already active");
+            accepted = true;
+            var completion = Installer.Install(list.ToList(), stops.ToList(), pluginPath, scriptPath, preset,
+                preselect, validate, new ProgressDelegate(_ => { }), handler).ContinueWith(task =>
             {
-#if DEBUG
-                using var logger = LogMethod($"{nameof(Install)}_Callback");
-#else
-                using var logger = LogMethod($"{nameof(Install)}_Callback");
-#endif
-                
+                return_value_json* payload;
                 try
                 {
-                    if (result.Exception is not null)
-                    {
-                        p_callback(p_callback_handler, return_value_json.AsException(result.Exception, false));
-                        logger.LogException(result.Exception);
-                    }
-                    else if (result.IsCanceled)
-                    {
-                        p_callback(p_callback_handler, return_value_json.AsValue(null, CustomSourceGenerationContext.InstallResult, false));
-                        logger.Log("Installation cancelled");
-                    }
-                    else
-                    {
-                        p_callback(p_callback_handler, return_value_json.AsValue(result.Result, CustomSourceGenerationContext.InstallResult, false));
-                    }
+                    payload = task.Exception is not null ? return_value_json.AsException(task.Exception, false)
+                        : return_value_json.AsValue(task.IsCanceled ? null : task.Result, CustomSourceGenerationContext.InstallResult, false);
                 }
-                catch (Exception e)
-                {
-                    p_callback(p_callback_handler, return_value_json.AsException(e, false));
-                    logger.LogException(e);
-                }
-            });
-
+                catch (Exception e) { payload = return_value_json.AsException(e, false); }
+                // Exactly one native result callback. Count through its actual return.
+                try { callback(callbackOwner, payload); }
+                finally { handler.EndInstall(); }
+            }, System.Threading.Tasks.TaskScheduler.Default);
+            handler.TrackCompletion(completion);
             return return_value_async.AsValue(false);
         }
         catch (Exception e)
         {
-            logger.LogException(e);
+            if (accepted) handler!.AbortInstall();
             return return_value_async.AsException(e, false);
         }
     }

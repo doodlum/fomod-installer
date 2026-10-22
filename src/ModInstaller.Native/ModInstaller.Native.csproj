@@ -69,6 +69,11 @@
     <PackageReference Include="ZLogger" Version="2.5.10" />
   </ItemGroup>
   
+  <!-- NativeAOT runtime threads outlive an individual Node environment. -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+    <LinkerArg Include="-Wl,-z,nodelete" />
+  </ItemGroup>
+
   <Target Name="CopyNativeContent" AfterTargets="Publish">
     <PropertyGroup>
       <NativeOutputDir>$(MSBuildProjectDirectory)\bin\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\native\</NativeOutputDir>
