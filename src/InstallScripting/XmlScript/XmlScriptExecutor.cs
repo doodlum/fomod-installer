@@ -75,7 +75,7 @@ namespace FomodInstaller.Scripting.XmlScript
         /// <see cref="XmlScript"/>.</exception>
         public async override Task<IList<Instruction>> DoExecute(IScript scpScript, string dataPath, object? preset, bool preselect = false)
         {
-            TaskCompletionSource<IList<Instruction>> Source = new TaskCompletionSource<IList<Instruction>>();
+            TaskCompletionSource<IList<Instruction>> Source = new TaskCompletionSource<IList<Instruction>>(TaskCreationOptions.RunContinuationsAsynchronously);
             List<InstallableFile> PluginsToActivate = new List<InstallableFile>();
 
             m_csmState = new ConditionStateManager();
@@ -107,7 +107,7 @@ namespace FomodInstaller.Scripting.XmlScript
 
             if ((xscScript.ModPrerequisites != null) && !xscScript.ModPrerequisites.GetIsFulfilled(m_csmState, m_Delegates))
             {
-                Source.SetResult(new List<Instruction>(new Instruction[] {
+                Source.TrySetResult(new List<Instruction>(new Instruction[] {
                     Instruction.InstallError("fatal", "Installer Prerequisits not fulfilled: " + xscScript.ModPrerequisites.GetMessage(m_csmState, m_Delegates, false))
                 }));
                 return await Source.Task;
@@ -139,7 +139,7 @@ namespace FomodInstaller.Scripting.XmlScript
                 }
 
                 var instructions = collectInstructions(lstSteps, xscScript, PluginsToActivate);
-                Source.SetResult(instructions);
+                Source.TrySetResult(instructions);
                 return await Source.Task;
             }
 
@@ -154,6 +154,7 @@ namespace FomodInstaller.Scripting.XmlScript
             // Otherwise use the UI flow
             Action<int, int, int[]> select = (stepId, groupId, optionIds) =>
             {
+                if (Source.Task.IsCompleted) return;
                 ISet<int> selectedIds = new HashSet<int>(optionIds);
                 IList<Option> options = lstSteps[stepId].OptionGroups[groupId].Options;
                 for (int i = 0; i < options.Count; ++i)
@@ -170,6 +171,7 @@ namespace FomodInstaller.Scripting.XmlScript
 
             Action<bool, int> cont = (forward, currentStep) =>
             {
+                if (Source.Task.IsCompleted) return;
                 if (currentStep != -1 && stepIdx != currentStep)
                 {
                     return;
@@ -187,7 +189,7 @@ namespace FomodInstaller.Scripting.XmlScript
             };
             Action cancel = () =>
             {
-                Source.SetCanceled();
+                Source.TrySetCanceled();
             };
 
             string bannerPath = string.IsNullOrEmpty(hifHeaderInfo.ImagePath)
@@ -197,7 +199,7 @@ namespace FomodInstaller.Scripting.XmlScript
                 new HeaderImage(bannerPath, hifHeaderInfo.ShowFade, hifHeaderInfo.Height),
                 select, cont, cancel);
 
-            processStep(lstSteps, stepIdx, Source, xscScript, PluginsToActivate);
+            if (!Source.Task.IsCompleted) processStep(lstSteps, stepIdx, Source, xscScript, PluginsToActivate);
 
             return await Source.Task;
         }
@@ -210,7 +212,7 @@ namespace FomodInstaller.Scripting.XmlScript
                 m_Delegates.ui.EndDialog();
 
                 var instructions = collectInstructions(lstSteps, xscScript, PluginsToActivate);
-                Source.SetResult(instructions);
+                Source.TrySetResult(instructions);
             }
             else
             {
