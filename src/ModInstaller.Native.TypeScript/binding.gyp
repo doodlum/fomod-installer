@@ -1,7 +1,7 @@
 {
     "targets": [
         {
-            "target_name": "modinstaller",
+            "target_name": "mi",
             "sources": [
                 "src-native/main.cpp"
             ],

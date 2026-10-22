@@ -47,7 +47,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p prebuilds/${{ matrix.platform }}
-          cp build/Release/modinstaller.node prebuilds/${{ matrix.platform }}/modinstaller.napi.node
+          cp build/Release/mi.node prebuilds/${{ matrix.platform }}/modinstaller.napi.node
           if [ "${{ matrix.platform }}" = "win32-x64" ]; then
             cp ModInstaller.Native.dll prebuilds/${{ matrix.platform }}/
             cp ModInstaller.Native.lib prebuilds/${{ matrix.platform }}/

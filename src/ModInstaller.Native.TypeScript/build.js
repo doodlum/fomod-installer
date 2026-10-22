@@ -450,7 +450,7 @@ async function main() {
       }
 
       copyItem(
-        `build/${configuration}/modinstaller.node`,
+        `build/${configuration}/mi.node`,
         `prebuilds/${platformDir}/modinstaller.napi.node`,
       );
       console.log("");
@@ -492,7 +492,7 @@ async function main() {
       if (!fs.existsSync(testPlatformDir)) {
         fs.mkdirSync(testPlatformDir, { recursive: true });
       }
-      copyItem(`build/${configuration}/modinstaller.node`, `prebuilds/${platformDir}/modinstaller.napi.node`);
+      copyItem(`build/${configuration}/mi.node`, `prebuilds/${platformDir}/modinstaller.napi.node`);
       if (process.platform === "win32") {
         copyItem("ModInstaller.Native.dll", `prebuilds/${platformDir}/ModInstaller.Native.dll`);
         copyItem("ModInstaller.Native.lib", `prebuilds/${platformDir}/ModInstaller.Native.lib`);
