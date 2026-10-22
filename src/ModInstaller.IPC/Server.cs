@@ -383,7 +383,7 @@ namespace ModInstallerIPC
 
                 Console.Out.WriteLine("[C#] Writing handshake 'connected'...");
                 Console.Out.Flush();
-                byte[] input = "connected"u8.ToArray();
+                byte[] input = System.Text.Encoding.UTF8.GetBytes("connected");
                 streamOut.Write(input, 0, input.Length);
                 streamOut.Flush();
                 Console.Out.WriteLine("[C#] Handshake written and flushed");

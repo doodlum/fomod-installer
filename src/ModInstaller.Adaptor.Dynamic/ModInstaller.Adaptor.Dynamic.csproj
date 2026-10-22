@@ -20,12 +20,12 @@
 
     <PropertyGroup Condition=" '$(OS)' == 'Windows_NT' ">
         <!-- NOTE(erri120): Required by CSharpScript project -->
-        <TargetFramework>net9.0-windows</TargetFramework>
+        <TargetFramework Condition="'$(FomodMono)' != 'true'">net9.0-windows</TargetFramework>
         <DefineConstants>$(DefineConstants);USE_CSHARP_SCRIPT</DefineConstants>
     </PropertyGroup>
 
     <PropertyGroup Condition=" '$(OS)' != 'Windows_NT' ">
-        <TargetFramework>net9.0</TargetFramework>
+        <TargetFramework Condition="'$(FomodMono)' != 'true'">net9.0</TargetFramework>
     </PropertyGroup>
 
 </Project>

@@ -188,15 +188,19 @@ namespace FomodInstaller.Interface
             file = TextUtil.NormalizePath(file, false, true);
 
             IList<string> NormalizedModFile = NormalizePathList(ModFiles);
-            if (!NormalizedModFile.Any(x => x.Contains(file, StringComparison.InvariantCultureIgnoreCase)))
+            if (!NormalizedModFile.Any(x => x.IndexOf(file, StringComparison.InvariantCultureIgnoreCase) >= 0))
             {
                 if (IsImageFile(Path.GetFileName(file)))
                     return TransparentPng1x1;
-                
+
                 throw new FileNotFoundException("File doesn't exist in FOMod", file);
             }
 
-            string filePath = Path.Combine(TempPath, file);
+            // the extracted file keeps its archived spelling, which matters on case-sensitive filesystems
+            int memberIndex = NormalizedModFile.IndexOf(file);
+            string filePath = Path.Combine(TempPath, memberIndex >= 0
+                ? TextUtil.NormalizePath(ModFiles[memberIndex], false, false, false)
+                : file);
 
             if (FileSystem.FileExists(filePath))
                 return FileSystem.ReadAllBytes(filePath);

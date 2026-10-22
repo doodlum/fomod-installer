@@ -97,12 +97,12 @@ namespace FomodInstaller.Scripting.CSharpScript
 
             CompilerResults crsResults = ccpProvider.CompileAssemblyFromSource(cpmOptions, p_strCode);
             p_cecErrors = null;
-            if (crsResults.Errors.HasErrors || crsResults.Errors.HasWarnings)
+            if (crsResults.Errors.HasErrors)
             {
                 p_cecErrors = crsResults.Errors.Cast<CompilerError>()
                     .Select(e => Diagnostic.Create(
                         new DiagnosticDescriptor(
-                            e.ErrorNumber,
+                            string.IsNullOrWhiteSpace(e.ErrorNumber) ? "MONOCOMPILER" : e.ErrorNumber,
                             e.ErrorText,
                             e.ErrorText,
                             "Compiler",

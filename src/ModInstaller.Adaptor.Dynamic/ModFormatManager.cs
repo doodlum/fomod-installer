@@ -108,8 +108,8 @@ namespace FomodInstaller.ModInstaller
 
         private bool scriptMatch(string filePath, string scriptFile)
         {
-            return Path.GetFileName(filePath).Contains(scriptFile, StringComparison.OrdinalIgnoreCase)
-              && Path.GetFileName(Path.GetDirectoryName(filePath)).Contains(FomodRoot, StringComparison.OrdinalIgnoreCase);
+            return (Path.GetFileName(filePath).IndexOf(scriptFile, StringComparison.OrdinalIgnoreCase) >= 0)
+              && (Path.GetFileName(Path.GetDirectoryName(filePath)).IndexOf(FomodRoot, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
         public async Task<IScriptType> GetScriptType(IList<string> modFiles, string extractedFilePath = null)
